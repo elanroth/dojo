@@ -1,0 +1,13 @@
+schema_version = 1
+id = "dojo"
+name = "Dojo — phone-evaluation PWA for the Lean dojo"
+kind = "tool"
+status = "active"
+default_branch = "main"
+
+[repository]
+provider = "github"
+slug = "elanroth/dojo"
+
+[commands]
+icons = ["node", "scripts/make-icons.mjs"]
