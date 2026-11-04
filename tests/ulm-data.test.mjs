@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { REVIEW } from '../review-data.js';
 import { summarize } from '../review-core.js';
+import { SOURCES } from '../review-sources.js';
 
 const base = () => summarize('ulm_theorem', [], REVIEW).base.map(x => x.decl.name);
 
@@ -32,8 +33,23 @@ test('the theorem payload hides the proof', () => {
   assert.ok(t.code.includes('Nonempty (G ≃+ H)') && !t.code.includes('constructor'));
 });
 
-test('no sorry and no axioms in the source', () => {
+test('no sorry, axioms or risky features in the source', () => {
   assert.deepEqual(REVIEW.sorries, {});
   assert.deepEqual(REVIEW.axioms, []);
-  assert.deepEqual(REVIEW.warnings, []);
+  assert.deepEqual(REVIEW.risky, {});
+});
+
+test('shipped data is the real thing', () => {
+  assert.equal(REVIEW.unchecked, undefined);
+  assert.equal(REVIEW.targets.length, 1);
+});
+
+test('every source passage belongs to a real declaration behind the theorem', () => {
+  const roots = new Set(REVIEW.decls.filter(d => d.root).map(d => d.name));
+  for (const [name, s] of Object.entries(SOURCES)) {
+    assert.ok(roots.has(name), name);
+    assert.ok(s.cite && s.passage && ['quote', 'paraphrase'].includes(s.kind), name);
+    assert.ok(s.passage.split(/\s+/).length <= 30, name + ' is too long for a public page');
+  }
+  assert.ok(SOURCES.ulm_theorem.passage.startsWith('Two reduced countable primary'));
 });

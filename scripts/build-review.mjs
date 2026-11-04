@@ -3,13 +3,14 @@
  *
  *   node scripts/build-review.mjs ../UlmsTheorem --slug elanroth/UlmsTheorem --target ulm_theorem
  *
- * This site is public, so the source must be a PUBLIC repo at a clean, pushed
- * commit. --unchecked skips those gates for tests and writes where --out says;
- * it refuses to overwrite the shipped review-data.js.
+ * This site is public. Everything quoted is read from the committed HEAD, never the
+ * working tree, and the build refuses unless that folder really is the named public
+ * repo and GitHub already has the commit. --unchecked skips those gates for tests,
+ * stamps the output so it can never pass as real, and cannot write the shipped file.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { existsSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, normalize, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildIndex, reviewPayload } from './lean-extract.mjs';
 
@@ -29,45 +30,67 @@ function args(argv) {
     else throw new Error('unexpected argument: ' + a);
   }
   if (!o.repo || !o.slug || !o.targets.length) {
-    throw new Error('usage: build-review.mjs <repo> --slug owner/name --target <theorem> [--target ...] [--lib Lib] [--out file] [--unchecked]');
+    throw new Error('usage: build-review.mjs <repo> --slug owner/name --target <theorem> [--lib Lib] [--out file] [--unchecked]');
   }
+  if (o.targets.length > 1) throw new Error('the app reviews one target at a time');
+  const lib = normalize(o.lib);
+  if (isAbsolute(lib) || lib === '..' || lib.startsWith('../')) throw new Error('--lib must stay inside the repo: ' + o.lib);
+  o.lib = lib.replace(/\/$/, '');
   return o;
 }
 
 const git = (repo, ...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8' }).trim();
 
+/* Case-insensitive volumes and symlinks can both reach the shipped file by another name. */
+function isShipped(out) {
+  if (!existsSync(out)) return resolve(out).toLowerCase() === SHIPPED.toLowerCase();
+  return realpathSync(out).toLowerCase() === realpathSync(SHIPPED).toLowerCase();
+}
+
+function remoteSlugs(repo) {
+  return git(repo, 'remote', '-v').split('\n').map(line => {
+    const m = line.match(/github\.com[:/]([^/\s]+\/[^/\s]+?)(?:\.git)?\s/);
+    return m ? m[1].toLowerCase() : null;
+  }).filter(Boolean);
+}
+
 function publicationGate(o) {
   if (o.unchecked) {
-    if (o.out === SHIPPED) throw new Error('--unchecked cannot write the shipped review-data.js');
+    if (isShipped(o.out)) throw new Error('--unchecked cannot write the shipped review-data.js');
     return;
   }
+  if (!remoteSlugs(o.repo).includes(o.slug.toLowerCase())) throw new Error(o.repo + ' has no GitHub remote for ' + o.slug);
   const vis = JSON.parse(execFileSync('gh', ['repo', 'view', o.slug, '--json', 'visibility'], { encoding: 'utf8' })).visibility;
   if (vis !== 'PUBLIC') throw new Error(o.slug + ' is ' + vis + '; only public repositories may be quoted on this site');
   if (git(o.repo, 'status', '--porcelain')) throw new Error(o.repo + ' has uncommitted changes');
-  if (!git(o.repo, 'branch', '-r', '--contains', 'HEAD')) throw new Error('HEAD of ' + o.repo + ' is not pushed');
+  const rev = git(o.repo, 'rev-parse', 'HEAD');
+  try {
+    execFileSync('gh', ['api', 'repos/' + o.slug + '/commits/' + rev, '--jq', '.sha'], { encoding: 'utf8', stdio: 'pipe' });
+  } catch {
+    throw new Error('GitHub does not have commit ' + rev.slice(0, 7) + ' in ' + o.slug);
+  }
 }
 
-function leanFiles(root, dir) {
-  return readdirSync(dir).flatMap(n => {
-    const p = join(dir, n);
-    if (statSync(p).isDirectory()) return leanFiles(root, p);
-    return n.endsWith('.lean') ? [relative(root, p)] : [];
-  });
-}
+/* Committed content only, so ignored or locally altered files can never be published. */
+const committed = (repo, path) => execFileSync('git', ['-C', repo, 'show', 'HEAD:' + path], { encoding: 'utf8', maxBuffer: 1 << 28 });
+const committedLean = (repo, lib) => git(repo, 'ls-tree', '-r', '--name-only', 'HEAD', '--', lib)
+  .split('\n').filter(f => f.endsWith('.lean'));
 
 function main() {
   const o = args(process.argv.slice(2));
   publicationGate(o);
   const sources = {};
-  for (const f of leanFiles(o.repo, join(o.repo, o.lib))) sources[f] = readFileSync(join(o.repo, f), 'utf8');
+  for (const f of committedLean(o.repo, o.lib)) sources[f] = committed(o.repo, f);
+  if (!Object.keys(sources).length) throw new Error('no committed Lean files under ' + o.lib);
 
-  const manifest = JSON.parse(readFileSync(join(o.repo, 'lake-manifest.json'), 'utf8'));
+  const manifest = JSON.parse(committed(o.repo, 'lake-manifest.json'));
   const mathlib = manifest.packages.find(p => p.name === 'mathlib');
   const payload = {
     repo: o.slug,
     rev: git(o.repo, 'rev-parse', 'HEAD'),
-    toolchain: readFileSync(join(o.repo, 'lean-toolchain'), 'utf8').trim(),
+    toolchain: committed(o.repo, 'lean-toolchain').trim(),
     mathlib: mathlib ? mathlib.rev : null,
+    ...(o.unchecked ? { unchecked: true } : {}),
     ...reviewPayload(buildIndex(sources), o.targets),
   };
   writeFileSync(o.out,
@@ -78,8 +101,13 @@ function main() {
   console.log(payload.repo + ' @ ' + payload.rev.slice(0, 7) + ': ' + payload.decls.length + ' reviewable, ' + roots.length + ' behind ' + o.targets.join(', '));
   roots.forEach(d => console.log('  ' + d.kind.padEnd(10) + d.name + '  ' + d.file + ':' + d.line));
   if (Object.keys(payload.sorries).length) console.log('sorry in: ' + JSON.stringify(payload.sorries));
+  if (Object.keys(payload.risky).length) console.log('needs attention: ' + JSON.stringify(payload.risky));
   if (payload.axioms.length) console.log('axioms: ' + payload.axioms.join(', '));
-  payload.warnings.forEach(w => console.log('warning: ' + w));
 }
 
-main();
+try {
+  main();
+} catch (e) {
+  console.error('build-review: ' + e.message);
+  process.exit(1);
+}

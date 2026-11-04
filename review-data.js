@@ -384,16 +384,16 @@ export const REVIEW = {
    "closure": [
     "pImage",
     "ulmSubgroup",
-    "instance#Lib/PGroups/UlmInvariants.lean#1",
+    "instance#Lib/PGroups/UlmInvariants.lean#66a14547",
     "layerQuotient_module"
    ],
    "ownHash": "96db4796de70660e",
-   "deepHash": "125f778f09b1b308",
+   "deepHash": "a7efb3c11f786256",
    "hasSorry": false,
    "root": false
   },
   {
-   "name": "instance#Lib/PGroups/UlmInvariants.lean#1",
+   "name": "instance#Lib/PGroups/UlmInvariants.lean#66a14547",
    "kind": "instance",
    "file": "Lib/PGroups/UlmInvariants.lean",
    "line": 48,
@@ -413,8 +413,8 @@ export const REVIEW = {
     "layerQuotient",
     "layerQuotient_module"
    ],
-   "ownHash": "8286489f0e1ddd8d",
-   "deepHash": "547998b5dfc97f12",
+   "ownHash": "700a38fe6f5d4348",
+   "deepHash": "a994cc55b77bf221",
    "hasSorry": false,
    "root": false
   },
@@ -437,10 +437,10 @@ export const REVIEW = {
     "pImage",
     "ulmSubgroup",
     "layerQuotient",
-    "instance#Lib/PGroups/UlmInvariants.lean#1"
+    "instance#Lib/PGroups/UlmInvariants.lean#66a14547"
    ],
    "ownHash": "4892b8bc44d2c588",
-   "deepHash": "42331d4762c7bf01",
+   "deepHash": "97286220a7645455",
    "hasSorry": false,
    "root": false
   },
@@ -463,11 +463,11 @@ export const REVIEW = {
     "pImage",
     "ulmSubgroup",
     "layerQuotient",
-    "instance#Lib/PGroups/UlmInvariants.lean#1",
+    "instance#Lib/PGroups/UlmInvariants.lean#66a14547",
     "layerQuotient_module"
    ],
    "ownHash": "db7183c4b256850b",
-   "deepHash": "db41d267bf317d08",
+   "deepHash": "895274c9af51e372",
    "hasSorry": false,
    "root": false
   },
@@ -1586,16 +1586,16 @@ export const REVIEW = {
     "stageAt",
     "kaplanskyStar",
     "stageAtSuccInStar",
-    "instance#Lib/Ulm/Extension.lean#1",
+    "instance#Lib/Ulm/Extension.lean#50e52a5a",
     "kaplanskyDomainQuotient_module"
    ],
    "ownHash": "e482fa54285a82a9",
-   "deepHash": "276d959399b73621",
+   "deepHash": "f4d1c17478f02d0f",
    "hasSorry": false,
    "root": false
   },
   {
-   "name": "instance#Lib/Ulm/Extension.lean#1",
+   "name": "instance#Lib/Ulm/Extension.lean#50e52a5a",
    "kind": "instance",
    "file": "Lib/Ulm/Extension.lean",
    "line": 65,
@@ -1621,8 +1621,8 @@ export const REVIEW = {
     "kaplanskyDomainQuotient",
     "kaplanskyDomainQuotient_module"
    ],
-   "ownHash": "5d846edadae1e730",
-   "deepHash": "32542b7e0d973305",
+   "ownHash": "c739d3efccc589a2",
+   "deepHash": "028ba2a6945f5210",
    "hasSorry": false,
    "root": false
   },
@@ -1651,10 +1651,10 @@ export const REVIEW = {
     "kaplanskyStar",
     "stageAtSuccInStar",
     "kaplanskyDomainQuotient",
-    "instance#Lib/Ulm/Extension.lean#1"
+    "instance#Lib/Ulm/Extension.lean#50e52a5a"
    ],
    "ownHash": "f4d7d47cc44c910a",
-   "deepHash": "fb0518660755d2bf",
+   "deepHash": "28f22871dbd78ad5",
    "hasSorry": false,
    "root": false
   },
@@ -1692,11 +1692,11 @@ export const REVIEW = {
     "kaplanskyStar",
     "stageAtSuccInStar",
     "kaplanskyDomainQuotient",
-    "instance#Lib/Ulm/Extension.lean#1",
+    "instance#Lib/Ulm/Extension.lean#50e52a5a",
     "kaplanskyDomainQuotient_module"
    ],
    "ownHash": "0672fc3a77ee4d6d",
-   "deepHash": "a24f960563197f8c",
+   "deepHash": "bc3eef6e816eb756",
    "hasSorry": false,
    "root": false
   },
@@ -1735,12 +1735,12 @@ export const REVIEW = {
     "kaplanskyStar",
     "stageAtSuccInStar",
     "kaplanskyDomainQuotient",
-    "instance#Lib/Ulm/Extension.lean#1",
+    "instance#Lib/Ulm/Extension.lean#50e52a5a",
     "kaplanskyDomainQuotient_module",
     "kaplanskyLinearMap"
    ],
    "ownHash": "348d7f9b5dafbf9b",
-   "deepHash": "bda2d8121470d492",
+   "deepHash": "eee5fa09ee5661bd",
    "hasSorry": false,
    "root": false
   },
@@ -1779,13 +1779,13 @@ export const REVIEW = {
     "kaplanskyStar",
     "stageAtSuccInStar",
     "kaplanskyDomainQuotient",
-    "instance#Lib/Ulm/Extension.lean#1",
+    "instance#Lib/Ulm/Extension.lean#50e52a5a",
     "kaplanskyDomainQuotient_module",
     "kaplanskyLinearMap",
     "kaplanskyOccupiedSubmodule"
    ],
    "ownHash": "ee6ccb042fd2fb14",
-   "deepHash": "473923fa9bfa8e9a",
+   "deepHash": "1d51cec5966c25f1",
    "hasSorry": false,
    "root": false
   },
@@ -1824,14 +1824,14 @@ export const REVIEW = {
     "kaplanskyStar",
     "stageAtSuccInStar",
     "kaplanskyDomainQuotient",
-    "instance#Lib/Ulm/Extension.lean#1",
+    "instance#Lib/Ulm/Extension.lean#50e52a5a",
     "kaplanskyDomainQuotient_module",
     "kaplanskyLinearMap",
     "kaplanskyOccupiedSubmodule",
     "kaplanskyRoomQuotient"
    ],
    "ownHash": "cffac1fb63626b9d",
-   "deepHash": "7158bac3b09b4852",
+   "deepHash": "983fd8e2031224bb",
    "hasSorry": false,
    "root": false
   },
@@ -1984,14 +1984,14 @@ export const REVIEW = {
     "kaplanskyStar",
     "stageAtSuccInStar",
     "kaplanskyDomainQuotient",
-    "instance#Lib/Ulm/Extension.lean#1",
+    "instance#Lib/Ulm/Extension.lean#50e52a5a",
     "kaplanskyDomainQuotient_module",
     "kaplanskyCorrection",
     "kaplanskySocleRep",
     "kaplanskyPreMap"
    ],
    "ownHash": "17411158bb84c004",
-   "deepHash": "462f10d23e64a42d",
+   "deepHash": "3075b761a93dd2a1",
    "hasSorry": false,
    "root": false
   },
@@ -2157,7 +2157,8 @@ export const REVIEW = {
     "universe u",
     "variable (p : ℕ) [hp : Fact p.Prime]",
     "variable {G : Type u} [AddCommGroup G]",
-    "variable {H : Type u} [AddCommGroup H]"
+    "variable {H : Type u} [AddCommGroup H]",
+    "omit hp in"
    ],
    "deps": [
     "UlmStageAt",
@@ -2173,15 +2174,15 @@ export const REVIEW = {
     "kaplanskyStar",
     "stageAtSuccInStar",
     "kaplanskyDomainQuotient",
-    "instance#Lib/Ulm/Extension.lean#1",
+    "instance#Lib/Ulm/Extension.lean#50e52a5a",
     "kaplanskyDomainQuotient_module",
     "UlmStage",
     "UlmStageAt",
     "UlmStage.symm",
     "kaplanskyStarEquiv"
    ],
-   "ownHash": "e441cdd8f5b4843f",
-   "deepHash": "af513bd9fc8e61ec",
+   "ownHash": "0e1cec2c238bb591",
+   "deepHash": "73a0c24fcd2d896b",
    "hasSorry": false,
    "root": false
   },
@@ -2198,12 +2199,15 @@ export const REVIEW = {
     "universe u",
     "variable (p : ℕ) [hp : Fact p.Prime]",
     "variable {G : Type u} [AddCommGroup G]",
-    "variable {H : Type u} [AddCommGroup H]"
+    "variable {H : Type u} [AddCommGroup H]",
+    "omit hp in",
+    "omit hp in",
+    "omit hp in"
    ],
    "deps": [],
    "closure": [],
-   "ownHash": "a5052388c42981e5",
-   "deepHash": "d1f0fb634c25fdc8",
+   "ownHash": "d979bf8e25a25419",
+   "deepHash": "92d187c3e4eafcdc",
    "hasSorry": false,
    "root": false
   },
@@ -2279,7 +2283,8 @@ export const REVIEW = {
     "universe u",
     "variable (p : ℕ) [hp : Fact p.Prime]",
     "variable {G : Type u} [AddCommGroup G]",
-    "variable {H : Type u} [AddCommGroup H]"
+    "variable {H : Type u} [AddCommGroup H]",
+    "omit hp in"
    ],
    "deps": [
     "BFIsoStep",
@@ -2293,8 +2298,8 @@ export const REVIEW = {
     "BFIsoStep",
     "BFIsoStep.init"
    ],
-   "ownHash": "b37884896cdcea05",
-   "deepHash": "55c57e04738beb23",
+   "ownHash": "6656249bc09bef73",
+   "deepHash": "78d31c6b471c35f3",
    "hasSorry": false,
    "root": false
   },
@@ -2311,7 +2316,12 @@ export const REVIEW = {
     "universe u",
     "variable (p : ℕ) [hp : Fact p.Prime]",
     "variable {G : Type u} [AddCommGroup G]",
-    "variable {H : Type u} [AddCommGroup H]"
+    "variable {H : Type u} [AddCommGroup H]",
+    "omit hp in",
+    "omit hp in",
+    "omit hp in",
+    "omit hp in",
+    "omit hp in"
    ],
    "deps": [
     "BFIsoStep",
@@ -2326,8 +2336,8 @@ export const REVIEW = {
     "BFIsoStep.init",
     "bf_chain"
    ],
-   "ownHash": "cd6debead4d10760",
-   "deepHash": "0804d0f2412a3900",
+   "ownHash": "d76152e07682106f",
+   "deepHash": "7532d681ec52eb35",
    "hasSorry": false,
    "root": false
   },
@@ -2371,6 +2381,12 @@ export const REVIEW = {
   }
  ],
  "sorries": {},
- "axioms": [],
- "warnings": []
+ "risky": {},
+ "refs": {
+  "Lib/PGroups/UlmInvariants.lean": [
+   "Fuchs, \"Abelian Groups\", Chapter 11, §1",
+   "Kaplansky, \"Infinite Abelian Groups\", Theorem 14"
+  ]
+ },
+ "axioms": []
 };

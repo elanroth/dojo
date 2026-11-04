@@ -33,9 +33,18 @@ what was read. It goes stale when any of these changes: the declaration's Lean, 
 options in scope, anything in its dependency closure, the toolchain or the Mathlib revision. Comments,
 docstrings, formatting and theorem proofs do not invalidate it.
 
-The extractor reads source text and does not elaborate, so it over-approximates dependencies rather
-than proving them. An instance joins the closure of anything its header mentions. It can still miss
-what only elaboration reveals, such as an instance that does not name a reviewed definition.
+The extractor reads source text and does not elaborate. It keeps every plausible reading of a name,
+and an instance joins the closure of anything its header mentions. Anything it cannot read stops the
+build with a file and line, rather than shrinking the queue. It can still miss what only elaboration
+reveals, such as an instance that does not name a reviewed definition. Mathlib's own definitions are
+pinned by revision, not queued.
+
+## Source passages
+
+`review-sources.js` holds what each definition should be compared with, by exact page. This site is
+public, so keep entries short and mostly paraphrase, and never write one from memory: a misremembered
+definition would make the check worthless. A card with no entry shows the references cited by the
+project. Either way the reviewer can record that they compared it with the book.
 
 ## Update the review data
 
@@ -43,7 +52,7 @@ what only elaboration reveals, such as an instance that does not name a reviewed
 node scripts/build-review.mjs ../UlmsTheorem --slug elanroth/UlmsTheorem --target ulm_theorem
 ```
 
-It refuses a source that is not a public repo at a clean, pushed commit. Then bump `CACHE` in `sw.js`
+It reads committed files only, and refuses unless the folder really is that public repo, clean, with its commit on GitHub. Then bump `CACHE` in `sw.js`
 and deploy. Check an exported ledger on the Mac (exits 0 only if everything is approved and current):
 
 ```bash
@@ -53,7 +62,7 @@ node scripts/check-reviews.mjs dojo-reviews-2026-11-03.json
 Run the tests:
 
 ```bash
-node --test tests/review.test.mjs tests/ulm-data.test.mjs
+node --test tests/review.test.mjs tests/ulm-data.test.mjs tests/gate.test.mjs
 ```
 
 ## Content provenance

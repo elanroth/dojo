@@ -1,9 +1,12 @@
 /* Text-level extraction of Lean 4 declarations for human review.
  *
- * Deliberately not an elaborator: it reads source, so it needs no Mathlib build,
- * and it errs towards over-approximating dependencies. It cannot see what only
- * elaboration reveals (instances found by unification outside the attachment
- * rule below, macro expansion across files). The UI says so.
+ * Deliberately not an elaborator: it reads source, so it needs no Mathlib build.
+ * That makes two rules matter. Dependencies are over-approximated: every plausible
+ * reading of a name is kept. And anything it cannot read stops the build with
+ * UnsupportedLean, because a skipped declaration would quietly shrink the queue.
+ *
+ * It still cannot see what only elaboration reveals, such as an instance that does
+ * not name a reviewed definition. The UI says so.
  *
  * What the hashes cover:
  *   ownHash  : kind, name, comment-free whitespace-normalised text, active scope.
@@ -12,13 +15,22 @@
  */
 import { createHash } from 'node:crypto';
 
-const MODIFIER = String.raw`(?:@\[[^\]]*\]\s*|(?:private|protected|public|noncomputable|unsafe|partial|nonrec)\s+)*`;
-const DECL_RE = new RegExp('^(' + MODIFIER + String.raw`)(class\s+inductive|def|abbrev|theorem|lemma|instance|structure|class|inductive|axiom|opaque|example)(?![\p{L}\p{N}_'.])`, 'u');
-const SECTION_RE = /^(?:(?:noncomputable|public)\s+)*section\b[ \t]*([^\s]*)/u;
-const CMD_RE = /^(?:local\s+|scoped\s+)?(variable|open|universe|namespace|end|attribute|set_option|omit|include|notation\d*|infixl|infixr|infix|prefix|postfix|macro_rules|macro|syntax|export|mutual|import|initialize|deriving|#\w+)(?![\p{L}\p{N}_'.])/u;
-const TOKEN_RE = /[\p{L}_][\p{L}\p{N}_'!?]*(?:\.[\p{L}_][\p{L}\p{N}_'!?]*)*/gu;
-const IN_SCOPE = new Set(['variable', 'open', 'universe', 'attribute', 'set_option', 'omit', 'include',
-  'notation', 'infixl', 'infixr', 'infix', 'prefix', 'postfix', 'macro_rules', 'macro', 'syntax', 'export']);
+export class UnsupportedLean extends Error {}
+
+const MODIFIER_RE = /^(?:private|protected|public|meta|noncomputable|unsafe|partial|nonrec|local|scoped)(?=\s)/u;
+const DECL_RE = /^(class\s+inductive|def|abbrev|theorem|lemma|instance|structure|class|inductive|axiom|opaque|example)(?![\p{L}\p{N}_'.])/u;
+const WORD_RE = /^#?[\p{L}_][\p{L}\p{N}_'!?]*/u;
+const TOKEN_RE = /(?:«[^»]+»|[\p{L}_][\p{L}\p{N}_'!?]*)(?:\.(?:«[^»]+»|[\p{L}_][\p{L}\p{N}_'!?]*))*/gu;
+const IDENT_CHAR = /[\p{L}\p{N}_'!?]/u;
+
+const SCOPED = new Set(['variable', 'open', 'universe', 'attribute', 'set_option', 'omit', 'include', 'export',
+  'notation', 'infixl', 'infixr', 'infix', 'prefix', 'postfix']);
+const NOTATION = new Set(['notation', 'notation3', 'infixl', 'infixr', 'infix', 'prefix', 'postfix']);
+const KNOWN = new Set([...SCOPED, 'notation3', 'namespace', 'section', 'end', 'import', 'mutual',
+  'macro', 'macro_rules', 'syntax', 'elab', 'elab_rules', 'initialize', 'deriving']);
+const INDENT_FORBIDDEN = new Set(['variable', 'universe', 'namespace', 'section', 'mutual', 'macro', 'macro_rules',
+  'syntax', 'elab', 'elab_rules', 'initialize', ...NOTATION]);
+const CONTINUATION = new Set(['deriving', 'where', 'with', 'extends', 'termination_by', 'decreasing_by', 'by']);
 
 export const DEF_KINDS = new Set(['def', 'abbrev', 'structure', 'class', 'class inductive', 'inductive', 'axiom', 'opaque', 'instance']);
 const THEOREM_KINDS = new Set(['theorem', 'lemma']);
@@ -26,22 +38,40 @@ const THEOREM_KINDS = new Set(['theorem', 'lemma']);
 const sha = s => createHash('sha256').update(s).digest('hex').slice(0, 16);
 const normalize = s => s.replace(/\s+/g, ' ').trim();
 
-/* Blank out comments, keeping every offset and newline. Strings are skipped so
- * that `--` inside a literal is not a comment. */
+/* Two views of a file with every offset kept. `masked` blanks comments; `scan` also
+ * blanks string and char literals, so their contents can never look like syntax. */
 export function maskComments(src) {
-  const out = src.split('');
-  const comments = [];
-  const blank = (a, b) => { for (let i = a; i < b; i++) if (out[i] !== '\n') out[i] = ' '; };
+  const masked = src.split('');
+  const scan = src.split('');
+  const comments = [], literals = [];
+  const blank = (arr, a, b) => { for (let k = a; k < b; k++) if (arr[k] !== '\n') arr[k] = ' '; };
+  const literal = (a, b) => { blank(scan, a, b); literals.push([a, b]); };
   let i = 0;
   while (i < src.length) {
+    const before = i ? src.slice(Math.max(0, i - 2), i) : '';
+    const afterIdent = IDENT_CHAR.test([...before].pop() || '');
+    if (src[i] === 'r' && !afterIdent) {
+      const m = src.slice(i, i + 40).match(/^r(#*)"/);
+      if (m) {
+        const close = src.indexOf('"' + m[1], i + m[0].length);
+        const end = close < 0 ? src.length : close + 1 + m[1].length;
+        literal(i, end);
+        i = end;
+        continue;
+      }
+    }
     if (src[i] === '"') {
-      i++;
+      const start = i++;
       while (i < src.length && src[i] !== '"') i += src[i] === '\\' ? 2 : 1;
       i++;
+      literal(start, i);
+    } else if (src[i] === "'" && !afterIdent) {
+      const m = src.slice(i, i + 12).match(/^'(?:\\(?:x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|.)|[^\\'\n])'/u);
+      if (m) { literal(i, i + m[0].length); i += m[0].length; } else i++;
     } else if (src.startsWith('--', i)) {
       const nl = src.indexOf('\n', i);
       const end = nl < 0 ? src.length : nl;
-      blank(i, end);
+      blank(masked, i, end); blank(scan, i, end);
       i = end;
     } else if (src.startsWith('/-', i)) {
       const start = i;
@@ -53,29 +83,42 @@ export function maskComments(src) {
         else if (src.startsWith('-/', i)) { depth--; i += 2; }
         else i++;
       }
-      if (depth) throw new Error('unterminated block comment at offset ' + start);
+      if (depth) throw new UnsupportedLean('unterminated block comment at offset ' + start);
       comments.push({ start, end: i, kind, text: src.slice(start, i) });
-      blank(start, i);
+      blank(masked, start, i); blank(scan, start, i);
     } else i++;
   }
-  return { masked: out.join(''), comments };
+  return { masked: masked.join(''), scan: scan.join(''), comments, literals };
 }
 
 const OPEN = new Set(['(', '[', '{', '⟨', '⦃', '⟦']);
 const CLOSE = new Set([')', ']', '}', '⟩', '⦄', '⟧']);
 
-/* Offset where the signature stops: the first depth-zero `:=`, `where`, or
- * pattern-match bar. */
+/* Offset where the signature stops, reading text with literals blanked. A `:=` that
+ * belongs to a `let` or `have`, and a bar inside a `match` or an absolute value, are
+ * part of the statement: cutting there would hide the rest of it from the reviewer. */
 export function headerEnd(text) {
-  let depth = 0;
+  let depth = 0, binders = 0, inMatch = false;
+  const word = at => (text.slice(at).match(WORD_RE) || [''])[0];
   for (let i = 0; i < text.length; i++) {
     const c = text[i];
-    if (OPEN.has(c)) depth++;
-    else if (CLOSE.has(c)) depth--;
-    else if (!depth) {
-      if (text.startsWith(':=', i)) return i;
-      if (c === '|' && /\n\s*$/.test(text.slice(0, i))) return i;
-      if (text.startsWith('where', i) && /\s/.test(text[i - 1] || ' ') && !/[\p{L}\p{N}_']/u.test(text[i + 5] || ' ')) return i;
+    if (OPEN.has(c)) { depth++; continue; }
+    if (CLOSE.has(c)) { depth--; continue; }
+    if (depth) continue;
+    if (text.startsWith(':=', i)) {
+      if (binders) { binders--; i++; continue; }
+      return i;
+    }
+    if (c === '|' && /\n\s*$/.test(text.slice(0, i)) && !inMatch) {
+      const line = text.slice(i, (text.indexOf('\n', i) + 1 || text.length + 1) - 1);
+      if (/=>/.test(line)) return i;
+    }
+    if (IDENT_CHAR.test(c) && !IDENT_CHAR.test(text[i - 1] || ' ')) {
+      const w = word(i);
+      if (w === 'where') return i;
+      if (w === 'let' || w === 'have') binders++;
+      if (w === 'match') inMatch = true;
+      i += Math.max(0, w.length - 1);
     }
   }
   return text.length;
@@ -87,11 +130,38 @@ function lineOf(src, offset) {
   return n;
 }
 
+/* Modifiers and attributes, then whatever word follows. */
+function parseHead(t) {
+  let i = 0;
+  const attrs = [];
+  for (;;) {
+    while (/\s/.test(t[i] || '')) i++;
+    if (t.startsWith('@[', i)) {
+      let depth = 0, k = i + 1;
+      for (; k < t.length; k++) {
+        if (t[k] === '[') depth++;
+        else if (t[k] === ']' && --depth === 0) break;
+      }
+      attrs.push(t.slice(i + 2, k));
+      i = k + 1;
+      continue;
+    }
+    const m = t.slice(i, i + 20).match(MODIFIER_RE);
+    if (m) { i += m[0].length; continue; }
+    break;
+  }
+  const rest = t.slice(i);
+  const decl = rest.match(DECL_RE);
+  if (decl) return { type: 'decl', kind: decl[1].replace(/\s+/, ' '), len: i + decl[0].length, attrs };
+  const w = (rest.match(WORD_RE) || [''])[0];
+  return { type: 'word', word: w, len: i + w.length, attrs, modified: i > 0, local: /(^|\s)(local|scoped)\s/.test(t.slice(0, i + 1)) };
+}
+
 function declName(afterKind, kind) {
-  const m = afterKind.match(/^\s*(?:\(priority[^)]*\)\s*)?([^\s:({[⦃]+)?/u);
-  const name = m && m[1];
+  const m = afterKind.match(/^\s*(?:\(priority[^)]*\)\s*)?(«[^»]+»(?:\.(?:«[^»]+»|[^\s:({[⦃.]+))*|[^\s:({[⦃«]+)?/u);
+  const name = m && m[1] && m[1].replace(/\.$/, '');
   if (!name || name === 'where') return null;
-  if (kind === 'instance' && name === ':') return null;
+  if (kind === 'instance' && name.startsWith(':')) return null;
   return name;
 }
 
@@ -106,95 +176,211 @@ function docBefore(src, comments, start) {
   return null;
 }
 
+function parseOpen(text) {
+  const body = text.replace(/\s+in$/, '').replace(/^(?:(?:local|scoped)\s+)*(?:open|export)\s+(?:scoped\s+)?/, '');
+  const opens = [], aliases = [];
+  const words = body.split(/\s+/);
+  let k = 0;
+  for (; k < words.length; k++) {
+    if (words[k] === 'hiding' || words[k] === 'renaming' || words[k].startsWith('(')) break;
+    opens.push(words[k]);
+  }
+  const ns = opens.at(-1);
+  const renaming = body.match(/\brenaming\s+(.*)$/);
+  if (renaming && ns) {
+    for (const pair of renaming[1].split(',')) {
+      const m = pair.match(/(\S+)\s*(?:→|->)\s*(\S+)/);
+      if (m) aliases.push([m[2], ns + '.' + m[1]]);
+    }
+  }
+  return { opens, aliases };
+}
+
+/* Whitespace runs collapse, except inside literals, where a space is meaning. */
+function normalizeRange(masked, literals, a, b) {
+  let out = '', i = a;
+  for (const [s, e] of literals) {
+    if (e <= a || s >= b) continue;
+    out += masked.slice(i, s).replace(/\s+/g, ' ') + masked.slice(s, e);
+    i = e;
+  }
+  return (out + masked.slice(i, b).replace(/\s+/g, ' ')).trim();
+}
+
+function fileRefs(comments) {
+  for (const c of comments) {
+    if (c.kind !== 'module') continue;
+    const m = c.text.match(/##\s*References\s*\n((?:[ \t]*-(?!\/)[^\n]*\n?)+)/);
+    if (m) return m[1].split('\n').map(l => l.replace(/^\s*-\s*/, '').trim()).filter(Boolean);
+  }
+  return [];
+}
+
 /* Every declaration in one file, with its namespace and active scope. */
 export function parseFile(file, src) {
-  const { masked, comments } = maskComments(src);
+  const { masked, scan, comments, literals } = maskComments(src);
+  const stop = (at, why) => { throw new UnsupportedLean(file + ':' + lineOf(src, at) + ': ' + why); };
+
   const starts = [];
-  for (let i = 0; i < masked.length;) {
-    const nl = masked.indexOf('\n', i);
-    const end = nl < 0 ? masked.length : nl;
-    if (i < end && !/\s/.test(masked[i])) {
-      const rest = masked.slice(i);
-      const d = rest.match(DECL_RE);
-      const s = rest.match(SECTION_RE);
-      const c = rest.match(CMD_RE);
-      if (d) starts.push({ at: i, type: 'decl', kind: d[2].replace(/\s+/, ' '), head: d[0].length });
-      else if (s) starts.push({ at: i, type: 'section', name: s[1] });
-      else if (c) starts.push({ at: i, type: c[1] });
+  let consumed = 0, depth = 0, depthAt = 0;
+  for (let i = 0; i < scan.length;) {
+    const nl = scan.indexOf('\n', i);
+    const end = nl < 0 ? scan.length : nl;
+    let j = i;
+    while (j < end && /\s/.test(scan[j])) j++;
+    if (j < end && j >= consumed) {
+      for (; depthAt < j; depthAt++) {
+        if (OPEN.has(scan[depthAt])) depth++;
+        else if (CLOSE.has(scan[depthAt])) depth--;
+      }
+      const afterComment = j > i && src.slice(i, j).trim() !== '';
+      const topLevel = j === i || afterComment;
+      const head = parseHead(scan.slice(j, j + 400));
+      const isCommand = head.type === 'decl' || KNOWN.has(head.word) || head.word.startsWith('#');
+      if (topLevel && isCommand && !(head.word === 'deriving' && !/^deriving\s+instance\b/.test(scan.slice(j, j + 40)))) {
+        starts.push({ at: j, ...head });
+        consumed = j + head.len;
+        depth = 0; depthAt = j;
+      } else if (topLevel && !isCommand && depth <= 0 && !CONTINUATION.has(head.word) && !CLOSE.has(scan[j]) && !/^(?:\||:=|·)/.test(scan.slice(j, j + 2))) {
+        stop(j, 'unrecognised command "' + scan.slice(j, end).trim().slice(0, 40) + '"');
+      } else if (!topLevel && (head.type === 'decl' || INDENT_FORBIDDEN.has(head.word))) {
+        stop(j, 'indented command "' + scan.slice(j, end).trim().slice(0, 40) + '"');
+      }
     }
     i = end + 1;
   }
 
-  const decls = [], imports = [], warnings = [];
+  const decls = [], imports = [], instanceNames = [], exportsOut = [];
   const frames = [{ type: 'file', name: '', scope: [] }];
-  let prefixText = '', prefixRaw = '', prefixStart = null, anon = 0;
+  const anonSeen = new Map();
+  let prefixText = '', prefixRaw = '', prefixOpens = [], prefixAliases = [], prefixStart = null;
+  const resetPrefix = () => { prefixText = ''; prefixRaw = ''; prefixOpens = []; prefixAliases = []; prefixStart = null; };
 
   starts.forEach((cmd, idx) => {
     const end = idx + 1 < starts.length ? starts[idx + 1].at : masked.length;
     const maskedText = masked.slice(cmd.at, end);
+    const scanText = scan.slice(cmd.at, end);
     const rawText = src.slice(cmd.at, end);
-    const text = normalize(maskedText);
-
-    if (cmd.type === 'import') { imports.push(...text.split(/\s+/).slice(1)); return; }
-    if (cmd.type === 'mutual') { warnings.push(file + ': mutual block is not split into declarations'); return; }
-    if (cmd.type === 'namespace') { frames.push({ type: 'namespace', name: text.split(/\s+/)[1], scope: [] }); return; }
-    if (cmd.type === 'section') { frames.push({ type: 'section', name: cmd.name, scope: [] }); return; }
-    if (cmd.type === 'end') { if (frames.length > 1) frames.pop(); return; }
+    const text = normalize(scanText);
+    const word = cmd.word;
 
     if (cmd.type !== 'decl') {
-      // `open X in` and `set_option x y in` modify only the next command.
-      if (/\sin$/.test(text)) {
-        prefixText += text + ' ';
-        prefixRaw += rawText.replace(/\s+$/, '') + '\n';
+      if (word === 'import') { imports.push(...text.replace(/^.*?\bimport\s+/, '').split(/\s+/).filter(w => w !== 'all')); return; }
+      if (word === 'mutual') stop(cmd.at, 'mutual blocks are not supported yet');
+      if (word === 'deriving') stop(cmd.at, '"deriving instance" is not supported yet');
+      if (['macro', 'macro_rules', 'syntax', 'elab', 'elab_rules', 'initialize'].includes(word)) stop(cmd.at, word + ' can change what later code means, and is not supported yet');
+      if (NOTATION.has(word) && !cmd.local) stop(cmd.at, 'non-local notation cannot be followed across files');
+      if (word === 'namespace') {
+        for (const part of text.split(/\s+/)[1].split('.')) frames.push({ type: 'namespace', name: part, scope: [] });
+        resetPrefix();
+        return;
+      }
+      if (word === 'section') {
+        const name = text.split(/\s+/).at(-1);
+        frames.push({ type: 'section', name: name === 'section' ? '' : name, scope: [] });
+        resetPrefix();
+        return;
+      }
+      if (word === 'end') {
+        const name = text.split(/\s+/)[1];
+        const parts = name ? name.split('.').length : 1;
+        for (let k = 0; k < parts; k++) {
+          if (frames.length === 1) stop(cmd.at, 'end without a matching namespace or section');
+          frames.pop();
+        }
+        resetPrefix();
+        return;
+      }
+      if ((word === 'open' || word === 'set_option') && /\sin$/.test(text)) {
+        prefixText += normalizeRange(masked, literals, cmd.at, end) + ' ';
+        prefixRaw += rawText.slice(0, maskedText.replace(/\s+$/, '').length) + '\n';
+        if (word === 'open') {
+          const o = parseOpen(text);
+          prefixOpens.push(...o.opens);
+          prefixAliases.push(...o.aliases);
+        }
         if (prefixStart === null) prefixStart = cmd.at;
-      } else if (IN_SCOPE.has(cmd.type)) frames[frames.length - 1].scope.push(text);
+        return;
+      }
+      if ((word === 'open' || word === 'set_option') && /\bin\s+\S/.test(text)) stop(cmd.at, '"' + word + ' … in" on one line with its command is not supported yet');
+      resetPrefix();
+      if (word === 'attribute') {
+        const m = text.match(/\[([^\]]*\binstance\b[^\]]*)\]\s*(.*)$/);
+        if (m) instanceNames.push(...m[2].split(/\s+/).filter(Boolean));
+      }
+      if (word === 'export') exportsOut.push(...parseOpen(text).opens);
+      if (SCOPED.has(word) || NOTATION.has(word)) {
+        frames[frames.length - 1].scope.push(normalizeRange(masked, literals, cmd.at, end));
+      }
       return;
     }
 
-    const usedPrefix = prefixText, usedRaw = prefixRaw, firstAt = prefixStart ?? cmd.at;
-    prefixText = ''; prefixRaw = ''; prefixStart = null;
+    const usedText = prefixText, usedRaw = prefixRaw, firstAt = prefixStart ?? cmd.at;
+    const usedOpens = prefixOpens, usedAliases = prefixAliases;
+    resetPrefix();
     if (cmd.kind === 'example') return;
 
-    const after = maskedText.slice(cmd.head);
+    const after = scanText.slice(cmd.len);
     const short = declName(after, cmd.kind);
-    const ns = frames.filter(f => f.type === 'namespace').map(f => f.name).join('.');
-    const name = short
-      ? (short.startsWith('_root_.') ? short.slice(7) : (ns ? ns + '.' + short : short))
-      : 'instance#' + file + '#' + (++anon);
+    const headerAt = headerEnd(scanText);
+    const header = normalize(scanText.slice(cmd.len, headerAt));
+    const ns = frames.filter(f => f.type === 'namespace').map(f => f.name);
+    let name;
+    if (short) {
+      name = short.startsWith('_root_.') ? short.slice(7) : [...ns, short].join('.');
+    } else {
+      const key = sha(header).slice(0, 8);
+      const n = (anonSeen.get(key) || 0) + 1;
+      anonSeen.set(key, n);
+      name = 'instance#' + file + '#' + key + (n > 1 ? '-' + n : '');
+    }
     const scope = frames.flatMap(f => f.scope);
-    const opens = scope.filter(s => /^(?:local\s+|scoped\s+)?open\b/.test(s)).flatMap(s => s.replace(/^.*?open\s+/, '').split(/\s+/));
-    const headerAt = headerEnd(maskedText);
+    const openStates = scope.filter(s => /^(?:(?:local|scoped)\s+)*open\b/.test(s)).map(parseOpen);
     const isThm = THEOREM_KINDS.has(cmd.kind);
-    const formal = isThm ? maskedText.slice(0, headerAt) : maskedText;
+    const formalEnd = cmd.at + (isThm ? headerAt : scanText.length);
     // Stop at the last real token, so the next declaration's docstring stays out.
-    const shownLen = (isThm ? maskedText.slice(0, headerAt) : maskedText).replace(/\s+$/, '').length;
-    const trimmedRaw = rawText.slice(0, shownLen);
+    const shownLen = masked.slice(cmd.at, formalEnd).replace(/\s+$/, '').length;
 
     decls.push({
       name, kind: cmd.kind, file,
       line: lineOf(src, firstAt),
-      endLine: lineOf(src, cmd.at + trimmedRaw.length),
+      endLine: lineOf(src, cmd.at + shownLen),
       doc: docBefore(src, comments, firstAt),
-      code: usedRaw + trimmedRaw,
-      scope, namespaces: ns ? ns.split('.') : [], opens,
-      formal: normalize(usedPrefix + formal),
-      header: normalize(maskedText.slice(cmd.head, headerAt)),
-      hasSorry: /\bsorry\b/.test(maskedText),
+      code: usedRaw + rawText.slice(0, shownLen),
+      scope,
+      namespaces: name.split('.').slice(0, -1),
+      opens: [...openStates.flatMap(o => o.opens), ...usedOpens],
+      aliases: [...openStates.flatMap(o => o.aliases), ...usedAliases],
+      formal: (usedText + normalizeRange(masked, literals, cmd.at, cmd.at + shownLen)).trim(),
+      formalScan: normalize(scan.slice(firstAt, cmd.at + shownLen)),
+      header,
+      isInstance: cmd.kind === 'instance' || cmd.attrs.some(a => /\binstance\b/.test(a)),
+      ctors: /inductive$/.test(cmd.kind)
+        ? [...scanText.slice(cmd.len).matchAll(/\|\s*([^\s:({[]+)/gu)].map(m => m[1]) : [],
+      hasSorry: /\b(?:sorry|admit|sorryAx)\b/.test(scanText),
     });
   });
-  return { decls, imports, warnings, sorries: (masked.match(/\bsorry\b/g) || []).length };
+  if (frames.length > 1) stop(src.length, 'unclosed namespace or section "' + frames.at(-1).name + '"');
+  const count = re => (scan.match(re) || []).length;
+  return {
+    decls, imports, instanceNames, exportsOut, refs: fileRefs(comments),
+    sorries: count(/\b(?:sorry|admit|sorryAx)\b/g),
+    risky: ['native_decide', 'implemented_by', 'extern', 'unsafe'].filter(w => new RegExp('\\b' + w + '\\b').test(scan)),
+  };
 }
 
 function tokens(text) {
-  const out = new Set();
+  const named = new Set(), fields = new Set();
   for (const m of text.matchAll(TOKEN_RE)) {
-    if (text[m.index - 1] === '.') continue;  // `.foo` and `(x).foo` are fields of something else
-    out.add(m[0]);
+    if (text[m.index - 1] === '.') fields.add(m[0]);  // `.foo`, `(x).foo`, `x |>.foo`
+    else named.add(m[0]);
   }
-  return out;
+  return { named, fields };
 }
 
-function resolver(names) {
+/* Every declaration a token could mean, not just the first: a wrong guess only adds
+ * something to read, while a missed one hides it. */
+function resolver(names, ctors) {
   const byLast = new Map();
   for (const n of names) {
     if (!n.includes('.')) continue;
@@ -202,24 +388,35 @@ function resolver(names) {
     if (!byLast.has(last)) byLast.set(last, []);
     byLast.get(last).push(n);
   }
-  return (tok, d) => {
-    const prefixes = [];
-    for (let i = d.namespaces.length; i >= 0; i--) prefixes.push(d.namespaces.slice(0, i).join('.'));
-    prefixes.push(...d.opens);
-    for (const p of prefixes) {
-      const full = p ? p + '.' + tok : tok;
-      if (names.has(full)) return [full];
-    }
-    if (!tok.includes('.')) return [];
-    const head = tok.split('.')[0];
-    if (names.has(head)) return [head];
-    // `s.at` is field notation: without types, take every `X.at`.
-    return byLast.get(tok.split('.').pop()) || [];
+  const lookup = q => (names.has(q) ? [q] : ctors.has(q) ? [ctors.get(q)] : []);
+  const ending = part => byLast.get(part) || [];
+  return {
+    named(tok, d, globalOpens) {
+      const out = new Set();
+      const add = xs => xs.forEach(x => out.add(x));
+      for (const [alias, full] of d.aliases) if (tok === alias || tok.startsWith(alias + '.')) add(lookup(full));
+      if (tok.startsWith('_root_.')) { add(lookup(tok.slice(7))); return out; }
+      const prefixes = [''];
+      for (let i = 1; i <= d.namespaces.length; i++) prefixes.push(d.namespaces.slice(0, i).join('.'));
+      for (const o of [...d.opens, ...globalOpens]) {
+        for (const p of [...prefixes]) prefixes.push(p ? p + '.' + o : o);
+      }
+      const parts = tok.split('.');
+      for (const p of prefixes) {
+        for (let n = parts.length; n >= 1; n--) {
+          const q = parts.slice(0, n).join('.');
+          add(lookup(p ? p + '.' + q : q));
+        }
+      }
+      // `s.g.h` is field notation: without types, take every `X.g` and `X.h`.
+      for (const part of parts.slice(1)) add(ending(part));
+      return out;
+    },
+    field: tok => tok.split('.').flatMap(ending),
   };
 }
 
-/* Import order, so sorting by (file, line) is a dependency order: Lean requires
- * declare-before-use. */
+/* Import order, so sorting by (file, line) follows declare-before-use. */
 function fileOrder(files) {
   const order = [], seen = new Set();
   const moduleOf = f => f.replace(/\.lean$/, '').replace(/\//g, '.');
@@ -234,8 +431,8 @@ function fileOrder(files) {
   return new Map(order.map((f, i) => [f, i]));
 }
 
-/* Link declarations across files and compute hashes. `sources` maps relative
- * path to file contents. */
+/* Link declarations across files and compute hashes. `sources` maps relative path
+ * to file contents. */
 export function buildIndex(sources) {
   const files = {};
   for (const [f, src] of Object.entries(sources)) files[f] = parseFile(f, src);
@@ -243,21 +440,37 @@ export function buildIndex(sources) {
   const all = Object.values(files).flatMap(f => f.decls)
     .sort((a, b) => order.get(a.file) - order.get(b.file) || a.line - b.line);
 
+  const byName = new Map();
+  for (const d of all) {
+    if (byName.has(d.name)) throw new UnsupportedLean(d.name + ' is declared twice (' + byName.get(d.name).file + ', ' + d.file + ')');
+    byName.set(d.name, d);
+  }
+  for (const f of Object.values(files)) {
+    for (const n of f.instanceNames) for (const d of all) if (d.name === n || d.name.endsWith('.' + n)) d.isInstance = true;
+  }
+
   const defLike = new Set(all.filter(d => DEF_KINDS.has(d.kind)).map(d => d.name));
-  const resolve = resolver(defLike);
+  const ctors = new Map();
+  for (const d of all) for (const c of d.ctors) ctors.set(d.name + '.' + c, d.name);
+  const resolve = resolver(defLike, ctors);
+  const globalOpens = Object.values(files).flatMap(f => f.exportsOut);
   const depsIn = (text, d) => {
     const out = new Set();
-    for (const t of tokens(text)) for (const n of resolve(t, d)) if (n !== d.name) out.add(n);
+    const { named, fields } = tokens(text);
+    for (const t of named) resolve.named(t, d, globalOpens).forEach(n => out.add(n));
+    for (const t of fields) resolve.field(t).forEach(n => out.add(n));
+    out.delete(d.name);
     return out;
   };
-  const byName = new Map(all.map(d => [d.name, d]));
   for (const d of all) {
-    d.deps = [...depsIn(d.formal, d)].sort();
+    // Variable binders and local notation are part of what the declaration says.
+    const assumed = d.scope.filter(s => /^(?:(?:local|scoped)\s+)*(?:variable|notation|infix|prefix|postfix)/.test(s)).join('\n');
+    d.deps = [...new Set([...depsIn(d.formalScan, d), ...depsIn(assumed, d)])].sort();
     d.ownHash = sha([d.kind, d.name, d.formal, d.scope.join('\n')].join('\0'));
   }
   // An instance about X can change what code using X means without being named,
   // so it joins any closure containing X.
-  const instances = all.filter(d => d.kind === 'instance').map(d => ({ name: d.name, about: depsIn(d.header, d) }));
+  const instances = all.filter(d => d.isInstance).map(d => ({ name: d.name, about: depsIn(d.header, d) }));
 
   const closureOf = d => {
     const seen = new Set();
@@ -283,10 +496,12 @@ export function buildIndex(sources) {
     d.deepHash = sha([d.name + ':' + d.ownHash, ...d.closure.map(n => n + ':' + byName.get(n).ownHash).sort()].join('\n'));
   }
 
+  const pick = fn => Object.fromEntries(Object.entries(files).map(([k, f]) => [k, fn(f)]).filter(([, v]) => v && (!Array.isArray(v) || v.length)));
   return {
     decls: all, byName,
-    warnings: Object.values(files).flatMap(f => f.warnings),
-    sorries: Object.fromEntries(Object.entries(files).filter(([, f]) => f.sorries).map(([k, f]) => [k, f.sorries])),
+    sorries: pick(f => f.sorries),
+    risky: pick(f => f.risky),
+    refs: pick(f => f.refs),
   };
 }
 
@@ -305,7 +520,8 @@ export function reviewPayload(index, targets) {
       root: rootSet.has(d.name),
     })),
     sorries: index.sorries,
+    risky: index.risky,
+    refs: index.refs,
     axioms: index.decls.filter(d => d.kind === 'axiom').map(d => d.name),
-    warnings: index.warnings,
   };
 }

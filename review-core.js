@@ -15,13 +15,21 @@ export function closureHashes(decl, byName) {
   return Object.fromEntries(decl.closure.map(n => [n, byName.get(n)?.ownHash ?? null]));
 }
 
-export function makeEvent(decl, verdict, note, data, at = Date.now()) {
+/* A new verdict must outrank every earlier one for its declaration, even if the
+ * device clock has since moved backwards. */
+export function nextTimestamp(events, repo, declName, now = Date.now()) {
+  let t = now;
+  for (const e of events) if (e.repo === repo && e.decl === declName && e.at >= t) t = e.at + 1;
+  return t;
+}
+
+export function makeEvent(decl, verdict, note, data, at = Date.now(), { checkedSource = false } = {}) {
   if (!VERDICTS.has(verdict)) throw new Error('unknown verdict: ' + verdict);
   const text = (note || '').trim();
   if (verdict === 'flagged' && !text) throw new Error('a flag needs a note saying what is wrong');
   return {
     id: 'v' + at + '-' + Math.random().toString(36).slice(2, 8),
-    repo: data.repo, decl: decl.name, verdict, note: text, at,
+    repo: data.repo, decl: decl.name, verdict, note: text, at, checkedSource: !!checkedSource,
     ownHash: decl.ownHash, deepHash: decl.deepHash,
     closure: closureHashes(decl, indexDecls(data)),
     code: decl.code, scope: decl.scope,
@@ -49,7 +57,7 @@ export function staleReason(decl, ev, data) {
     const was = ev.closure || {};
     const changed = [...new Set([...Object.keys(now), ...Object.keys(was)])]
       .filter(n => now[n] !== was[n]).sort();
-    if (changed.length) reasons.push({ type: 'deps', changed });
+    if (changed.length || ev.ownHash === decl.ownHash) reasons.push({ type: 'deps', changed });
   }
   if (ev.toolchain !== data.toolchain) reasons.push({ type: 'toolchain', from: ev.toolchain, to: data.toolchain });
   if (ev.mathlib !== data.mathlib) reasons.push({ type: 'mathlib', from: ev.mathlib, to: data.mathlib });
@@ -79,39 +87,76 @@ export function summarize(target, events, data) {
   const latest = latestEvents(events, data.repo);
   const base = trustBase(target, data).map(decl => ({ decl, status: statusOf(decl, latest, data) }));
   const count = s => base.filter(x => x.status.state === s).length;
+  const approved = base.filter(x => x.status.state === 'approved');
   const counts = {
-    total: base.length, approved: count('approved'), flagged: count('flagged'),
+    total: base.length, approved: approved.length, flagged: count('flagged'),
     stale: count('stale'), unsure: count('unsure'), unreviewed: count('unreviewed'),
+    imported: approved.filter(x => x.status.event.imported).length,
+    sourced: approved.filter(x => x.status.event.checkedSource).length,
+    sorry: base.filter(x => x.decl.hasSorry).length,
   };
-  return { base, counts, trusted: counts.approved === counts.total };
+  return { base, counts, trusted: counts.approved === counts.total && !counts.sorry };
 }
 
 /* What to read next: anything changed first, then new work, then the ones you
- * were unsure of. Flagged items wait for a code change, so they are not offered.
- * `after` keeps "Not sure" from offering the same card again straight away. */
-export function nextInQueue(target, events, data, after = null) {
-  const { base } = summarize(target, events, data);
-  const pick = state => {
-    const items = base.filter(x => x.status.state === state && x.decl.name !== after);
-    return items.length ? items[0].decl : null;
-  };
-  return pick('stale') || pick('unreviewed') || pick('unsure');
+ * were unsure of, oldest first. Flagged items wait for a code change, so they are
+ * not offered. Mid-session, `includeUnsure: false` ends the run instead of
+ * circling back through items you already passed on. */
+export function nextInQueue(target, events, data, { after = null, includeUnsure = true } = {}) {
+  const items = summarize(target, events, data).base.filter(x => x.decl.name !== after);
+  const changed = items.find(x => x.status.state === 'stale' || (x.status.state === 'unsure' && x.status.stale));
+  if (changed) return changed.decl;
+  const fresh = items.find(x => x.status.state === 'unreviewed');
+  if (fresh) return fresh.decl;
+  if (!includeUnsure) return null;
+  const unsure = items.filter(x => x.status.state === 'unsure')
+    .sort((a, b) => a.status.event.at - b.status.event.at);
+  return unsure.length ? unsure[0].decl : null;
 }
 
-/* Imported files are untrusted input: keep only well-formed events. */
-export function parseLedger(json) {
+const MAX_FUTURE_MS = 24 * 3600 * 1000;
+const withoutImportMark = ({ imported, ...e }) => JSON.stringify(e);
+
+/* Imported files are untrusted input. Keep only well-formed events, refuse future
+ * dates (one could outrank every later verdict), and refuse an id that appears
+ * twice with different content, since either copy could be the wrong one. */
+export function parseLedger(json, now = Date.now()) {
   const raw = typeof json === 'string' ? JSON.parse(json) : json;
   if (!raw || raw.format !== LEDGER_FORMAT || !Array.isArray(raw.events)) {
     throw new Error('not a dojo review ledger');
   }
   const str = v => typeof v === 'string';
   const opt = v => v === undefined || str(v);
-  const good = raw.events.filter(e => e && str(e.id) && str(e.repo) && str(e.decl) &&
-    VERDICTS.has(e.verdict) && Number.isFinite(e.at) && str(e.ownHash) && str(e.deepHash) &&
+  const wellFormed = e => e && str(e.id) && str(e.repo) && str(e.decl) &&
+    VERDICTS.has(e.verdict) && Number.isSafeInteger(e.at) && e.at <= now + MAX_FUTURE_MS &&
+    str(e.ownHash) && str(e.deepHash) &&
     opt(e.note) && opt(e.code) && opt(e.rev) && opt(e.toolchain) && (e.mathlib === null || opt(e.mathlib)) &&
     (e.scope === undefined || (Array.isArray(e.scope) && e.scope.every(str))) &&
-    (e.closure === undefined || (e.closure && typeof e.closure === 'object' && !Array.isArray(e.closure))));
-  return { events: good, skipped: raw.events.length - good.length };
+    (e.closure === undefined || (e.closure && typeof e.closure === 'object' && !Array.isArray(e.closure)));
+  const good = raw.events.filter(wellFormed);
+  const byId = new Map();
+  const conflicted = new Set();
+  for (const e of good) {
+    const seen = byId.get(e.id);
+    if (seen && withoutImportMark(seen) !== withoutImportMark(e)) conflicted.add(e.id);
+    else if (!seen) byId.set(e.id, e);
+  }
+  for (const id of conflicted) byId.delete(id);
+  return { events: [...byId.values()], skipped: raw.events.length - good.length, conflicts: conflicted.size };
+}
+
+/* Split parsed events against what is stored. Nothing already stored is replaced. */
+export function planImport(incoming, stored) {
+  const have = new Map(stored.map(e => [e.id, e]));
+  const fresh = [];
+  let same = 0, conflicts = 0;
+  for (const e of incoming) {
+    const old = have.get(e.id);
+    if (!old) fresh.push({ ...e, imported: true });
+    else if (withoutImportMark(old) === withoutImportMark(e)) same++;
+    else conflicts++;
+  }
+  return { fresh, same, conflicts };
 }
 
 export const serializeLedger = (events, data, exportedAt) => JSON.stringify({
@@ -141,8 +186,10 @@ export function lineDiff(before, after) {
 
 export function describeStale(reasons) {
   return reasons.map(r => {
-    if (r.type === 'own') return 'Its Lean changed.';
-    if (r.type === 'deps') return 'Depends on something that changed: ' + r.changed.join(', ') + '.';
+    if (r.type === 'own') return 'Its Lean or the assumptions in scope changed.';
+    if (r.type === 'deps') return r.changed.length
+      ? 'Depends on something that changed: ' + r.changed.join(', ') + '.'
+      : 'Something it depends on changed.';
     if (r.type === 'toolchain') return 'Lean toolchain changed: ' + r.from + ' to ' + r.to + '.';
     if (r.type === 'mathlib') return 'Mathlib changed: ' + String(r.from).slice(0, 10) + ' to ' + String(r.to).slice(0, 10) + '.';
     return 'Changed.';

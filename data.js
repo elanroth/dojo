@@ -23,7 +23,7 @@ export const GLOSSARY = {
     qual: 'ulmInvariant', origin: 'project', file: 'Lib/PGroups/UlmInvariants.lean:108',
     sig: 'noncomputable def ulmInvariant {G : Type*} [AddCommGroup G]\n    (α : Ordinal) : Cardinal :=\n  Module.rank (ZMod p) (ulmQuotient p α (G := G))',
     gloss: 'The classical Ulm invariant f_G(α) — the ℤ/pℤ-dimension of P_α / P_{α+1}, where P_α is the p-socle cut down to stage α of the filtration. This is the invariant Ulm’s theorem is about.',
-    warn: 'Not the same as layerInvariant. See Decide.',
+    warn: 'Not the same as layerInvariant. Compare them in the Decide tab.',
   },
   layerInvariant: {
     qual: 'layerInvariant', origin: 'project', file: 'Lib/PGroups/UlmInvariants.lean:79',
@@ -77,7 +77,7 @@ export const GLOSSARY = {
     qual: 'Module.rank', origin: 'mathlib', file: 'Mathlib/LinearAlgebra/Dimension/… (not pinned)',
     sig: 'Module.rank (R) (M) : Cardinal',
     gloss: 'The dimension of a module as a cardinal — the supremum of sizes of linearly independent sets. Cardinal-valued, so it works for infinite-dimensional socle quotients.',
-    warn: 'I confirmed Module.rank is used in the pinned Mathlib (e.g. Mathlib/Analysis/RCLike/Lemmas.lean:40) but could not locate its definition site by grep. Treat the path as unverified.',
+    warn: 'The exact file for this definition is not pinned here. Use the docs link to find it.',
   },
   'AddCommGroup.zmodModule': {
     qual: 'AddCommGroup.zmodModule', origin: 'mathlib', file: 'Mathlib/Algebra/Module/ZMod.lean:44',

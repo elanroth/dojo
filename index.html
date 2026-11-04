@@ -9,20 +9,20 @@
 <meta name="theme-color" content="#2c3c22">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Ulm Dojo">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 <link rel="icon" href="icons/icon-192.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap">
+<link rel="stylesheet" crossorigin="anonymous" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&display=swap">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
 <header class="top">
   <div class="where">
-    <div class="eyebrow" id="room-eyebrow">Review</div>
-    <h1 id="room-title">Review</h1>
+    <div class="eyebrow" id="room-eyebrow">Checking</div>
+    <h1 id="room-title">ulm_theorem</h1>
   </div>
   <button class="icon-btn" id="btn-note" aria-label="Note something about this screen">✎</button>
   <button class="icon-btn" id="btn-about" aria-label="About this prototype">?</button>
@@ -49,6 +49,8 @@
 <input type="file" id="shot" accept="image/*" hidden>
 <input type="file" id="ledger-file" accept="application/json,.json" hidden>
 
-<script type="module" src="app.js"></script>
+<p id="load-error" hidden>The app couldn’t finish loading. Connect to the internet, then close and reopen it.</p>
+
+<script type="module" src="app.js" onerror="document.getElementById('load-error').hidden=false"></script>
 </body>
 </html>
