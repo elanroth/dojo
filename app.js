@@ -1,39 +1,55 @@
 import { MATHLIB_REV, TOOLCHAIN, REPO, GLOSSARY, READING, QUESTIONS, DAG, THEOREM, PACKS } from './data.js';
+import { REVIEW } from './review-data.js';
+import {
+  describeStale, latestEvents, lineDiff, makeEvent, nextInQueue, parseLedger, serializeLedger,
+  statusOf, summarize,
+} from './review-core.js';
 
 const $ = s => document.querySelector(s);
 const el = (t, c, x) => { const n = document.createElement(t); if (c) n.className = c; if (x != null) n.textContent = x; return n; };
 const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
-let ROOM = 'read';
+let ROOM = 'review';
 let NOTES = [];
 
 const ROOMS = {
+  review: { title: 'Behind ' + REVIEW.targets[0], eyebrow: 'Review' },
   read:   { title: 'Ulm invariants',     eyebrow: 'Read' },
-  decide: { title: 'Definition review',  eyebrow: 'Decide' },
+  decide: { title: 'Practice questions', eyebrow: 'Decide' },
   map:    { title: 'Ulm dependency map', eyebrow: 'Map' },
   carry:  { title: 'Offline satchel',    eyebrow: 'Carry' },
   notes:  { title: 'Change requests',    eyebrow: 'Notes' },
 };
 
 /* ───────────────────────── storage: IndexedDB ─────────────────────────
- * Notes and screenshot blobs live on the device. Nothing leaves the phone:
- * this is a static site with no backend, by design. */
-const DB_NAME = 'ulm-dojo', STORE = 'notes';
+ * Notes, screenshot blobs and review verdicts live on the device. Nothing leaves
+ * the phone unless exported: this is a static site with no backend, by design. */
+const DB_NAME = 'ulm-dojo', STORE = 'notes', VERDICT_STORE = 'verdicts';
 let _db = null;
 function idb() {
   if (_db) return Promise.resolve(_db);
   return new Promise((res, rej) => {
-    const r = indexedDB.open(DB_NAME, 1);
-    r.onupgradeneeded = () => { r.result.createObjectStore(STORE, { keyPath: 'id' }); };
-    r.onsuccess = () => { _db = r.result; res(_db); };
+    const r = indexedDB.open(DB_NAME, 2);
+    r.onupgradeneeded = () => {
+      const stores = r.result.objectStoreNames;
+      if (!stores.contains(STORE)) r.result.createObjectStore(STORE, { keyPath: 'id' });
+      if (!stores.contains(VERDICT_STORE)) r.result.createObjectStore(VERDICT_STORE, { keyPath: 'id' });
+    };
+    r.onblocked = () => toast('Close other Dojo windows so its storage can update.', 6000);
+    r.onsuccess = () => {
+      _db = r.result;
+      _db.onversionchange = () => { _db.close(); _db = null; };
+      res(_db);
+    };
     r.onerror = () => rej(r.error);
   });
 }
-async function tx(mode, fn) {
+async function tx(mode, fn, store = STORE) {
   const db = await idb();
   return new Promise((res, rej) => {
-    const t = db.transaction(STORE, mode);
-    const out = fn(t.objectStore(STORE));
+    const t = db.transaction(store, mode);
+    const out = fn(t.objectStore(store));
+    t.onabort = () => rej(t.error);
     t.oncomplete = () => res(out && out.result !== undefined ? out.result : out);
     t.onerror = () => rej(t.error);
   });
@@ -41,6 +57,8 @@ async function tx(mode, fn) {
 const loadNotes = () => tx('readonly', s => s.getAll()).catch(() => []);
 const putNote   = n  => tx('readwrite', s => s.put(n));
 const dropNote  = id => tx('readwrite', s => s.delete(id));
+const loadVerdicts = () => tx('readonly', s => s.getAll(), VERDICT_STORE);
+const putVerdict   = e  => tx('readwrite', s => s.put(e), VERDICT_STORE);
 
 /* ───────────────────────── chrome ───────────────────────── */
 function toast(html, ms = 3400) {
@@ -96,6 +114,308 @@ function termSheet(key) {
   });
 }
 
+/* ───────────────────────── REVIEW ─────────────────────────
+ * The kernel checks proofs. It cannot check that a definition means the right
+ * thing, so this room is that check: the statement of the target theorem and the
+ * definitions it rests on, leaves first. */
+const TARGET = REVIEW.targets[0];
+const DECLS = new Map(REVIEW.decls.map(d => [d.name, d]));
+const STATE_LABEL = {
+  approved: ['Approved', 'ok'], flagged: ['Flagged', 'stop'], stale: ['Changed', 'warn'],
+  unsure: ['Not sure', 'warn'], unreviewed: ['To review', ''],
+};
+let VERDICTS = [];
+let STORAGE_OK = true;
+let CARD = null;
+
+const shortName = n => n.startsWith('instance#') ? 'instance ' + n.split('#').pop() + ' in ' + n.split('#')[1].split('/').pop() : n;
+const statusFor = d => statusOf(d, latestEvents(VERDICTS, REVIEW.repo), REVIEW);
+const statePill = st => el('span', 'pill ' + STATE_LABEL[st][1], STATE_LABEL[st][0]);
+const sourceUrl = d => 'https://github.com/' + REVIEW.repo + '/blob/' + REVIEW.rev + '/' + d.file + '#L' + d.line + '-L' + d.endLine;
+
+function openCard(name) {
+  CARD = name;
+  if (ROOM === 'review') { renderReview(); window.scrollTo(0, 0); } else go('review');
+}
+
+function renderReview() {
+  if (CARD && DECLS.has(CARD)) renderCard(DECLS.get(CARD)); else renderQueue();
+}
+
+function queueRow(d) {
+  const b = el('button', 'queue-row');
+  b.append(el('b', null, shortName(d.name)), statePill(statusFor(d).state), el('small', null, d.kind + ' · ' + d.file.split('/').pop() + ':' + d.line));
+  b.onclick = () => openCard(d.name);
+  return b;
+}
+
+function trustSentence(c) {
+  const parts = [];
+  if (c.flagged) parts.push(c.flagged + ' flagged');
+  if (c.stale) parts.push(c.stale + ' changed since you read them');
+  if (c.unsure) parts.push(c.unsure + ' not sure');
+  if (c.unreviewed) parts.push(c.unreviewed + ' still to read');
+  return parts.join(', ') + '.';
+}
+
+function renderQueue() {
+  const v = $('#view-review'); v.textContent = '';
+  const { base, counts, trusted } = summarize(TARGET, VERDICTS, REVIEW);
+
+  if (!STORAGE_OK) {
+    const a = el('div', 'alert stop'); a.style.marginBottom = '13px';
+    a.append(el('div', 'meta', 'Storage unavailable'), el('p', null, 'This browser is not letting the app save, so verdicts would be lost. Try the installed app, outside private browsing.'));
+    v.appendChild(a);
+  }
+
+  const t = el('div', 'card trust' + (trusted ? ' done' : ''));
+  t.appendChild(el('div', 'meta', 'The statement you are checking'));
+  const pre = el('pre', 'lean wrap'); pre.style.marginTop = '9px'; pre.textContent = DECLS.get(TARGET).code;
+  t.appendChild(pre);
+  const budget = el('div', 'budget'); budget.style.marginTop = '12px';
+  budget.append(el('span', null, 'Approved and current'), el('span', null, counts.approved + ' of ' + counts.total));
+  t.appendChild(budget);
+  const bar = el('div', 'bar'), fill = el('i');
+  fill.style.width = (counts.approved / counts.total * 100) + '%';
+  bar.appendChild(fill); t.appendChild(bar);
+  t.appendChild(el('p', null, trusted
+    ? 'You have read everything this statement rests on and approved its meaning. Lean checks the proof separately, with lake build.'
+    : trustSentence(counts)));
+  const next = nextInQueue(TARGET, VERDICTS, REVIEW);
+  if (next) {
+    const row = el('div', 'row'); row.style.marginTop = '12px';
+    const go1 = el('button', 'act primary', 'Review next: ' + shortName(next.name));
+    go1.onclick = () => openCard(next.name);
+    row.appendChild(go1); t.appendChild(row);
+  } else if (counts.flagged) {
+    t.appendChild(el('p', null, 'Only flagged items remain. They clear when the Lean changes or you re-review them.'));
+  }
+  v.appendChild(t);
+
+  const list = el('div', 'card section');
+  list.appendChild(el('div', 'meta', 'Behind this theorem, leaves first'));
+  base.forEach(({ decl }) => list.appendChild(queueRow(decl)));
+  v.appendChild(list);
+
+  const others = REVIEW.decls.filter(d => !d.root);
+  if (others.length) {
+    const o = el('details', 'card section');
+    o.appendChild(el('summary', null, 'Other definitions (' + others.length + ')'));
+    o.appendChild(el('p', 'disclaim', TARGET + '’s statement does not mention these, so a wrong one here cannot make it say the wrong thing. Proofs may still use them; Lean checks that.'));
+    others.forEach(d => o.appendChild(queueRow(d)));
+    v.appendChild(o);
+  }
+
+  const led = el('div', 'card section');
+  led.appendChild(el('div', 'meta', 'Your verdicts'));
+  led.appendChild(el('p', 'lede', VERDICTS.length + ' saved on this device only. Export them to keep a copy or to check them on the Mac.'));
+  const row = el('div', 'row'); row.style.marginTop = '11px';
+  const ex = el('button', 'act', 'Export'); ex.onclick = exportLedger;
+  const im = el('button', 'act', 'Import'); im.onclick = () => $('#ledger-file').click();
+  row.append(ex, im); led.appendChild(row);
+  v.appendChild(led);
+
+  const sorries = Object.keys(REVIEW.sorries).length;
+  v.appendChild(el('p', 'disclaim', REVIEW.repo + ' @ ' + REVIEW.rev.slice(0, 7) + ' · ' + REVIEW.toolchain + ' · Mathlib ' + (REVIEW.mathlib || '?').slice(0, 10) +
+    ' · ' + (sorries ? 'sorry in ' + sorries + ' file(s)' : 'no sorry') + ' · ' + (REVIEW.axioms.length ? REVIEW.axioms.length + ' axiom(s)' : 'no axioms') +
+    '. Dependencies are read from source text, not elaborated, so Lean could still use something this list misses.'));
+}
+
+/* Lean with its known names tappable. Everything goes through text nodes. */
+function leanWithTerms(d) {
+  const pre = el('pre', 'lean wrap'); pre.style.marginTop = '9px';
+  const code = d.code;
+  const local = new Map();
+  for (const dep of d.deps) { local.set(dep, dep); local.set(dep.split('.').pop(), dep); }
+  let at = 0;
+  for (const m of code.matchAll(/[\p{L}_][\p{L}\p{N}_'!?]*(?:\.[\p{L}_][\p{L}\p{N}_'!?]*)*/gu)) {
+    const tok = m[0];
+    const project = code[m.index - 1] === '.' ? null : local.get(tok);
+    const g = GLOSSARY[tok];
+    if (!project && !(g && g.origin === 'mathlib')) continue;
+    pre.appendChild(document.createTextNode(code.slice(at, m.index)));
+    const b = el('button', 'term', tok);
+    b.onclick = () => project ? declSheet(project) : termSheet(tok);
+    pre.appendChild(b);
+    at = m.index + tok.length;
+  }
+  pre.appendChild(document.createTextNode(code.slice(at)));
+  return pre;
+}
+
+function claimBlock(d) {
+  const wrap = el('div', 'section');
+  wrap.appendChild(el('div', 'meta', 'What it claims'));
+  if (d.doc) {
+    wrap.appendChild(el('p', 'claim', d.doc));
+    wrap.appendChild(el('p', 'disclaim', 'From the docstring: written with the code, so it is a claim to test, not independent evidence.'));
+  } else {
+    wrap.appendChild(el('p', 'claim none', 'No docstring. Judge the Lean against the mathematics you expect.'));
+  }
+  const g = GLOSSARY[d.name];
+  if (g && g.origin === 'project') {
+    wrap.appendChild(el('div', 'meta', 'Dojo note')).style.marginTop = '11px';
+    wrap.appendChild(el('p', 'claim', g.gloss));
+    if (g.warn) wrap.appendChild(el('p', 'disclaim', g.warn));
+  }
+  return wrap;
+}
+
+function staleBlock(d, st) {
+  const a = el('div', 'alert'); a.style.marginTop = '13px';
+  a.appendChild(el('div', 'meta', 'Changed since your ' + st.event.verdict + ' verdict on ' + new Date(st.event.at).toLocaleDateString()));
+  describeStale(st.stale).forEach(s => a.appendChild(el('p', null, s)));
+  if (st.event.note) a.appendChild(el('p', null, 'Your note: ' + st.event.note));
+  if (st.event.code && st.event.code !== d.code) {
+    const pre = el('pre', 'lean wrap diff'); pre.style.marginTop = '9px';
+    lineDiff(st.event.code, d.code).forEach(l => pre.appendChild(
+      el('span', l.t === '+' ? 'add' : l.t === '-' ? 'del' : null, l.t + ' ' + l.s)));
+    a.appendChild(pre);
+  }
+  return a;
+}
+
+function renderCard(d) {
+  const v = $('#view-review'); v.textContent = '';
+  const st = statusFor(d);
+  const back = el('button', 'back', '‹ All definitions');
+  back.onclick = () => { CARD = null; renderReview(); window.scrollTo(0, 0); };
+  v.appendChild(back);
+
+  const c = el('div', 'card');
+  const head = el('div', 'card-head');
+  head.append(el('h2', null, shortName(d.name)), statePill(st.state));
+  c.appendChild(head);
+  const src = el('a', 'srcline', d.kind + ' · ' + d.file + ':' + d.line);
+  src.href = sourceUrl(d); src.target = '_blank'; src.rel = 'noopener'; src.style.display = 'block';
+  c.appendChild(src);
+  if (st.stale && st.state === 'stale') c.appendChild(staleBlock(d, st));
+  if (st.state === 'flagged') {
+    const a = el('div', 'alert stop'); a.style.marginTop = '13px';
+    a.append(el('div', 'meta', 'You flagged this'), el('p', null, st.event.note));
+    c.appendChild(a);
+  }
+  if (d.hasSorry) {
+    const a = el('div', 'alert stop'); a.style.marginTop = '13px';
+    a.append(el('div', 'meta', 'Contains sorry'), el('p', null, 'Part of this declaration is unproved.'));
+    c.appendChild(a);
+  }
+  c.appendChild(claimBlock(d));
+
+  const lean = el('div', 'section');
+  lean.appendChild(el('div', 'meta', 'The Lean' + (d.kind === 'theorem' || d.kind === 'lemma' ? ' (statement only: the kernel checks the proof)' : '')));
+  lean.appendChild(leanWithTerms(d));
+  c.appendChild(lean);
+  if (d.kind === 'instance') c.appendChild(el('p', 'disclaim', 'An instance: Lean can use this silently wherever the types match, without the code naming it.'));
+
+  if (d.scope.length) {
+    const s = el('div', 'section');
+    s.appendChild(el('div', 'meta', 'Also in scope'));
+    const pre = el('pre', 'lean wrap'); pre.style.marginTop = '9px'; pre.textContent = d.scope.join('\n');
+    s.appendChild(pre);
+    c.appendChild(s);
+  }
+  if (d.deps.length) {
+    const u = el('div', 'section');
+    u.appendChild(el('div', 'meta', 'Rests on'));
+    const chips = el('div', 'chips');
+    d.deps.forEach(n => {
+      const dep = DECLS.get(n);
+      const b = el('button', 'chip');
+      b.append(el('i', 'mark ' + statusFor(dep).state), el('span', null, shortName(n)));
+      b.onclick = () => declSheet(n);
+      chips.appendChild(b);
+    });
+    u.appendChild(chips);
+    c.appendChild(u);
+  }
+  v.appendChild(c);
+
+  const f = el('div', 'card section');
+  f.appendChild(el('div', 'meta', 'Your verdict'));
+  f.appendChild(el('p', 'lede', 'Does this Lean mean what the mathematics should mean? Check the hypotheses and the edge cases. Approving says you read it, not that it compiles.'));
+  const ta = el('textarea'); ta.id = 'verdict-note'; ta.style.marginTop = '10px';
+  ta.placeholder = 'Note (required to flag)';
+  f.appendChild(ta);
+  const row = el('div', 'verdicts');
+  const yes = el('button', 'act primary', 'Means the right thing');
+  yes.onclick = () => record(d, 'approved', ta.value);
+  const no = el('button', 'act danger', 'Flag mismatch');
+  no.onclick = () => {
+    if (!ta.value.trim()) { toast('Say what looks wrong, then flag.'); ta.focus(); return; }
+    record(d, 'flagged', ta.value);
+  };
+  const unsure = el('button', 'act', 'Not sure');
+  unsure.onclick = () => record(d, 'unsure', ta.value);
+  row.append(yes, no, unsure);
+  f.appendChild(row);
+  v.appendChild(f);
+
+  const hist = VERDICTS.filter(e => e.repo === REVIEW.repo && e.decl === d.name).sort((a, b) => b.at - a.at);
+  if (hist.length) {
+    const h = el('div', 'card section');
+    h.appendChild(el('div', 'meta', 'History'));
+    hist.forEach(e => h.appendChild(el('div', 'hist',
+      new Date(e.at).toLocaleString() + ' · ' + e.verdict + ' · ' + (e.rev || '').slice(0, 7) + (e.note ? ' · ' + e.note : ''))));
+    v.appendChild(h);
+  }
+}
+
+function declSheet(name) {
+  const d = DECLS.get(name);
+  if (!d) { toast('Not in the review data.'); return; }
+  sheet((s, close) => {
+    const head = el('div', 'card-head');
+    head.append(el('h2', null, shortName(d.name)), statePill(statusFor(d).state));
+    s.appendChild(head);
+    s.appendChild(el('p', 'qual', d.kind + ' · ' + d.file + ':' + d.line));
+    if (d.doc) s.appendChild(el('p', 'gloss', d.doc));
+    const pre = el('pre', 'lean wrap'); pre.textContent = d.code; s.appendChild(pre);
+    const row = el('div', 'row'); row.style.marginTop = '14px';
+    const o = el('button', 'act primary', 'Review this one');
+    o.onclick = () => { close(); openCard(d.name); };
+    row.appendChild(o); s.appendChild(row);
+  });
+}
+
+async function record(d, verdict, note) {
+  let ev;
+  try { ev = makeEvent(d, verdict, note, REVIEW); } catch (e) { toast(esc(e.message)); return; }
+  // Never show a verdict as recorded unless it reached storage.
+  try { await putVerdict(ev); } catch (e) { toast('<b>Not saved.</b> Storage refused the write, so nothing was recorded.', 5000); return; }
+  VERDICTS.push(ev);
+  navigator.storage?.persist?.().catch(() => {});
+  const next = d.root ? nextInQueue(TARGET, VERDICTS, REVIEW, d.name) : null;
+  CARD = next ? next.name : null;
+  renderReview();
+  window.scrollTo(0, 0);
+  toast(esc(shortName(d.name)) + ': ' + esc(verdict) + '. Saved on this device.', 2200);
+}
+
+async function exportLedger() {
+  if (!VERDICTS.length) { toast('No verdicts to export yet.'); return; }
+  const stamp = new Date().toISOString().slice(0, 10);
+  const text = serializeLedger(VERDICTS, REVIEW, new Date().toISOString());
+  await shareFile(new File([text], 'dojo-reviews-' + stamp + '.json', { type: 'application/json' }), 'Dojo reviews');
+}
+
+$('#ledger-file').addEventListener('change', async e => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  try {
+    const { events, skipped } = parseLedger(await f.text());
+    const have = new Set(VERDICTS.map(x => x.id));
+    const fresh = events.filter(x => !have.has(x.id));
+    for (const x of fresh) await putVerdict(x);
+    VERDICTS.push(...fresh);
+    renderReview();
+    toast('Imported ' + fresh.length + ' new verdict(s)' + (skipped ? ', ignored ' + skipped + ' malformed' : '') + '.');
+  } catch (err) {
+    toast('<b>Import failed.</b> ' + esc(err.message || 'Unreadable file.'), 5000);
+  }
+});
+
 /* ───────────────────────── READ ───────────────────────── */
 function renderRead() {
   const v = $('#view-read'); v.textContent = '';
@@ -133,8 +453,8 @@ function renderRead() {
   const row = el('div', 'row'); row.style.marginTop = '13px';
   const b1 = el('button', 'act stub', 'Check this file');
   b1.onclick = () => stub('Check this file', 'Sends UlmInvariants.lean to the Lean server on the Mac and returns goals and diagnostics');
-  const b2 = el('button', 'act stub', 'Mark reviewed');
-  b2.onclick = () => stub('Mark reviewed', 'Records an approval bound to source hash, declaration hash and toolchain, so it goes stale if the definition changes');
+  const b2 = el('button', 'act', 'Review this definition');
+  b2.onclick = () => openCard('ulmInvariant');
   row.append(b1, b2);
   v.appendChild(row);
   v.appendChild(el('p', 'disclaim', 'Tap any highlighted term — in the prose or in the Lean — to see where it is defined.'));
@@ -368,24 +688,28 @@ async function saveNote(ta) {
   renderNotes();
 }
 
+/* Share sheet is the only reliable way to get a file off iOS Safari. */
+async function shareFile(file, title) {
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title }); return true; } catch (e) { if (e.name === 'AbortError') return false; }
+  }
+  const url = URL.createObjectURL(file);
+  const a = el('a'); a.href = url; a.download = file.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  return true;
+}
+
 async function exportNotes() {
   if (!NOTES.length) { toast('Nothing to export yet.'); return; }
   const body = NOTES.slice().sort((a, b) => a.at - b.at)
     .map(n => '## ' + (n.room || '?') + '  ·  ' + new Date(n.at).toISOString() + '\n\n' + (n.text || '') +
       (n.blob ? '\n\n(screenshot attached in the app — export images separately)' : '')).join('\n\n---\n\n');
   const md = '# Ulm Dojo — change requests\n\n' + body + '\n';
-  const file = new File([md], 'dojo-notes.md', { type: 'text/markdown' });
-  // Share sheet is the only reliable way to get a file off iOS Safari.
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    try { await navigator.share({ files: [file], title: 'Dojo notes' }); return; } catch (e) { if (e.name === 'AbortError') return; }
-  }
-  const url = URL.createObjectURL(file);
-  const a = el('a'); a.href = url; a.download = 'dojo-notes.md'; a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  await shareFile(new File([md], 'dojo-notes.md', { type: 'text/markdown' }), 'Dojo notes');
 }
 
 /* ───────────────────────── shell ───────────────────────── */
-const RENDER = { read: renderRead, decide: renderDecide, map: renderMap, carry: renderCarry, notes: renderNotes };
+const RENDER = { review: renderReview, read: renderRead, decide: renderDecide, map: renderMap, carry: renderCarry, notes: renderNotes };
 function go(room) {
   ROOM = room;
   document.documentElement.dataset.room = room;
@@ -407,12 +731,12 @@ $('#btn-note').onclick = () => {
 
 $('#btn-about').onclick = () => sheet(s => {
   s.appendChild(el('h2', null, 'What this is'));
-  s.appendChild(el('p', 'gloss', 'A phone evaluation harness for the Lean dojo — Folio’s term linking, Pocket’s decisions, Atlas’s dependency map, Satchel’s offline picker. Workbench is deliberately absent.'));
+  s.appendChild(el('p', 'gloss', 'A phone tool for checking that Lean says what it claims. Lean’s kernel checks proofs; it cannot check that a definition means the right thing. Review is that human check. The other rooms are the original evaluation harness.'));
   const dl = el('dl', 'prov');
-  provRow(dl, 'Real', 'Every Lean signature, path, import edge and declaration count was read from ' + REPO + ' on disk.');
+  provRow(dl, 'Real', 'Review is generated from ' + REVIEW.repo + ' @ ' + REVIEW.rev.slice(0, 7) + ': every declaration, hash and dependency. Verdicts are saved on this device.');
   provRow(dl, 'Mathlib', 'Signatures from the pinned checkout, commit ' + MATHLIB_REV + '.');
-  provRow(dl, 'Not real', 'Nothing compiles, dispatches a job, or syncs. Controls marked ◌ say what they would do.');
-  provRow(dl, 'Privacy', 'Static page, no backend, no analytics. Notes and screenshots never leave this device.');
+  provRow(dl, 'Not real', 'Nothing compiles, dispatches a job, or syncs. Dependencies come from source text, not elaboration. Controls marked ◌ say what they would do.');
+  provRow(dl, 'Privacy', 'Static page, no backend, no analytics. Notes and verdicts leave this device only when you export them.');
   s.appendChild(dl);
   s.appendChild(el('p', 'disclaim', 'Install: Safari share menu → Add to Home Screen. Once installed it opens offline.'));
   const row = el('div', 'row'); row.style.marginTop = '10px';
@@ -429,8 +753,12 @@ $('#btn-about').onclick = () => sheet(s => {
 window.addEventListener('online',  () => { if (ROOM === 'carry') renderCarry(); });
 window.addEventListener('offline', () => { if (ROOM === 'carry') renderCarry(); });
 
-go('read');
+go('review');
 loadNotes().then(n => { NOTES = n || []; if (ROOM === 'notes') renderNotes(); });
+loadVerdicts()
+  .then(v => { VERDICTS = v || []; })
+  .catch(() => { STORAGE_OK = false; })
+  .then(() => { if (ROOM === 'review') renderReview(); });
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));

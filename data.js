@@ -165,17 +165,17 @@ export const QUESTIONS = [
 export const DAG = [
   { id: 'Lib.Basic', dep: [], d: 0, role: 'Ambient imports only.' },
   { id: 'Lib.PGroups.Basic', dep: ['Lib.Basic'], d: 0, role: 'Re-export layer.' },
-  { id: 'Lib.PGroups.Subgroups', dep: ['Lib.PGroups.Basic'], d: 7, role: 'pImage and subgroup plumbing.' },
-  { id: 'Lib.PGroups.UlmSubgroups', dep: ['Lib.PGroups.Subgroups'], d: 11, role: 'p^α·G by transfinite recursion. The filtration.' },
-  { id: 'Lib.PGroups.Heights', dep: ['Lib.PGroups.UlmSubgroups'], d: 10, role: 'Height function over the filtration.' },
+  { id: 'Lib.PGroups.Subgroups', dep: ['Lib.PGroups.Basic'], d: 9, role: 'pImage and subgroup plumbing.' },
+  { id: 'Lib.PGroups.UlmSubgroups', dep: ['Lib.PGroups.Subgroups'], d: 13, role: 'p^α·G by transfinite recursion. The filtration.' },
+  { id: 'Lib.PGroups.Heights', dep: ['Lib.PGroups.UlmSubgroups'], d: 12, role: 'Height function over the filtration.' },
   { id: 'Lib.PGroups.Defs', dep: ['Lib.PGroups.Heights'], d: 0, role: 'IsReducedPGroup and friends.' },
-  { id: 'Lib.PGroups.Socle', dep: ['Lib.PGroups.Defs'], d: 7, role: 'pSocle and pSocleAt — P_α.' },
-  { id: 'Lib.PGroups.UlmInvariants', dep: ['Lib.PGroups.Socle'], d: 38, role: 'ulmInvariant, layerInvariant, marked-graded variants.' },
-  { id: 'Lib.Ulm.Invariance', dep: ['Lib.PGroups.UlmInvariants'], d: 4, role: 'Invariants are preserved by isomorphism. The easy direction.' },
+  { id: 'Lib.PGroups.Socle', dep: ['Lib.PGroups.Defs'], d: 12, role: 'pSocle and pSocleAt — P_α.' },
+  { id: 'Lib.PGroups.UlmInvariants', dep: ['Lib.PGroups.Socle'], d: 40, role: 'ulmInvariant, layerInvariant, marked-graded variants.' },
+  { id: 'Lib.Ulm.Invariance', dep: ['Lib.PGroups.UlmInvariants'], d: 5, role: 'Invariants are preserved by isomorphism. The easy direction.' },
   { id: 'Lib.PGroups.Morphisms', dep: ['Lib.Ulm.Invariance'], d: 0, role: 'Morphism layer.' },
-  { id: 'Lib.Ulm.Pure', dep: ['Lib.PGroups.Morphisms', 'Lib.PGroups.Socle'], d: 33, role: 'Purity — the technical heart of the back-and-forth.' },
-  { id: 'Lib.Ulm.Extension', dep: ['Lib.Ulm.Pure'], d: 55, role: 'Extension lemmas. Largest file in the repo.' },
-  { id: 'Lib.Ulm.Classification', dep: ['Lib.Ulm.Extension'], d: 3, role: 'Equal invariants ⇒ isomorphic. The hard direction.' },
+  { id: 'Lib.Ulm.Pure', dep: ['Lib.PGroups.Morphisms', 'Lib.PGroups.Socle'], d: 34, role: 'Purity — the technical heart of the back-and-forth.' },
+  { id: 'Lib.Ulm.Extension', dep: ['Lib.Ulm.Pure'], d: 59, role: 'Extension lemmas. Largest file in the repo.' },
+  { id: 'Lib.Ulm.Classification', dep: ['Lib.Ulm.Extension'], d: 16, role: 'Equal invariants ⇒ isomorphic. The hard direction.' },
   { id: 'Lib.Ulm.Theorem', dep: ['Lib.Ulm.Classification', 'Lib.Ulm.Invariance'], d: 5, role: 'Public entry point: ulm_theorem, both directions.' },
 ];
 
@@ -188,8 +188,8 @@ export const THEOREM =
       ulmInvariant p α (G := G) = ulmInvariant p α (G := H)`;
 
 export const PACKS = [
-  { id: 'ulm-core', name: 'Ulm core', sub: 'Socle · UlmSubgroups · UlmInvariants · 56 decls', mb: 1.4, on: true },
-  { id: 'ulm-hard', name: 'Hard direction', sub: 'Pure · Extension · Classification · 91 decls', mb: 2.1, on: false },
+  { id: 'ulm-core', name: 'Ulm core', sub: 'Socle · UlmSubgroups · UlmInvariants · 65 decls', mb: 1.4, on: true },
+  { id: 'ulm-hard', name: 'Hard direction', sub: 'Pure · Extension · Classification · 109 decls', mb: 2.1, on: false },
   { id: 'gloss', name: 'Definition glossary', sub: '13 terms, project + Mathlib signatures', mb: 0.1, on: true },
   { id: 'dag', name: 'Dependency map', sub: '14 nodes, real import edges', mb: 0.05, on: true },
   { id: 'goals', name: 'Last goal traces', sub: 'Cached states from the most recent check', mb: 0.6, on: false },

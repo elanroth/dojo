@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Ulm Dojo</title>
-<meta name="description" content="Phone evaluation harness for the Lean dojo: read Lean beside English, review definitions, walk the dependency map, pick what to carry offline.">
+<meta name="description" content="Review what a Lean theorem actually says: read the definitions behind it, record verdicts bound to their hashes, and see when a change invalidates them.">
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#2c3c22">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -21,15 +21,16 @@
 
 <header class="top">
   <div class="where">
-    <div class="eyebrow" id="room-eyebrow">Read</div>
-    <h1 id="room-title">Ulm invariants</h1>
+    <div class="eyebrow" id="room-eyebrow">Review</div>
+    <h1 id="room-title">Review</h1>
   </div>
   <button class="icon-btn" id="btn-note" aria-label="Note something about this screen">✎</button>
   <button class="icon-btn" id="btn-about" aria-label="About this prototype">?</button>
 </header>
 
 <main>
-  <section class="view" id="view-read"></section>
+  <section class="view" id="view-review"></section>
+  <section class="view" id="view-read" hidden></section>
   <section class="view" id="view-decide" hidden></section>
   <section class="view" id="view-map" hidden></section>
   <section class="view" id="view-carry" hidden></section>
@@ -37,7 +38,8 @@
 </main>
 
 <nav class="nav" aria-label="Sections">
-  <button data-room="read"   aria-current="true"><span class="glyph">❧</span>Read</button>
+  <button data-room="review" aria-current="true"><span class="glyph">✓</span>Review</button>
+  <button data-room="read"   aria-current="false"><span class="glyph">❧</span>Read</button>
   <button data-room="decide" aria-current="false"><span class="glyph">◆</span>Decide</button>
   <button data-room="map"    aria-current="false"><span class="glyph">⁙</span>Map</button>
   <button data-room="carry"  aria-current="false"><span class="glyph">▤</span>Carry</button>
@@ -45,6 +47,7 @@
 </nav>
 
 <input type="file" id="shot" accept="image/*" hidden>
+<input type="file" id="ledger-file" accept="application/json,.json" hidden>
 
 <script type="module" src="app.js"></script>
 </body>

@@ -11,3 +11,4 @@ slug = "elanroth/dojo"
 
 [commands]
 icons = ["node", "scripts/make-icons.mjs"]
+test = ["node", "--test", "tests/review.test.mjs", "tests/ulm-data.test.mjs"]
